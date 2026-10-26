@@ -58,7 +58,24 @@ def parse_article(line):
     """
     # TODO: implement. json.loads raises ValueError on invalid JSON; use
     # is_integer() for the id and for each link.
-    raise NotImplementedError("parse_article")
+    try:
+        article = json.loads(line)
+    except ValueError:
+        return None
+
+    if not isinstance(article, dict):
+        return None
+
+    article_id = article.get("id")
+    if not is_integer(article_id):
+        return None
+    
+    links = article.get("links")
+    if not isinstance(links, list):
+        links = []
+    links = [link for link in links if is_integer(link)]
+
+    return article_id, links
 
 
 def build_graph(lines):
@@ -75,7 +92,31 @@ def build_graph(lines):
     # valid ids: join the candidate edges (keyed by target) with the ids.
     # Finally attach the kept targets to every article, keeping the articles
     # that have none (cogroup or leftOuterJoin), and sort/deduplicate them.
-    raise NotImplementedError("build_graph")
+
+    articles = lines.map(parse_article).filter(lambda x: x is not None)
+
+    valid_ids = articles.map(lambda x: (x[0], None))
+
+    def edges(article):
+        source, links = article
+        return [(target, source) for target in links if target != source]
+
+    candidate_edges = articles.flatMap(edges)
+
+    def valid_edge(edge):
+        target, (source,_) = edge
+        return (source, target)
+
+    valid_edges = candidate_edges.join(valid_ids).map(valid_edge)
+
+    source_targets = valid_edges.groupByKey().mapValues(lambda targets: sorted(set(targets)))
+
+    def attach_targets(pair):
+        _, targets = pair
+        return targets if targets is not None else []
+
+    graph = valid_ids.leftOuterJoin(source_targets).mapValues(attach_targets)
+    return graph
 
 
 # --- PageRank -------------------------------------------------------------------
@@ -87,7 +128,11 @@ def contributions(targets, rank, damping):
     (no targets) sends nothing.
     """
     # TODO: implement.
-    raise NotImplementedError("contributions")
+    if not targets:
+        return []
+    
+    share = damping * rank / len(targets)
+    return [(target, share) for target in targets]
 
 
 def pagerank_step(links, ranks, num_pages, damping, num_partitions, checkpoint=False):
@@ -115,7 +160,23 @@ def pagerank_step(links, ranks, num_pages, damping, num_partitions, checkpoint=F
     # 4. Keep the partitioner (mapValues), persist, call checkpoint() if
     #    asked, and only then run actions.
     # 5. delta = sum over pages of |new - old|.
-    raise NotImplementedError("pagerank_step")
+    joined = links.join(ranks)
+
+    contribution = joined.flatMap(lambda x: contributions(x[1][0], x[1][1], damping))
+    summed = contribution.reduceByKey(add, num_partitions)
+
+    incoming = links.leftOuterJoin(summed).mapValues(lambda x: x[1] if x[1] is not None else 0.0)
+    incoming.persist()
+    d = 1 - incoming.values().sum()
+    new_ranks = incoming.mapValues(lambda rank: rank + d / num_pages)
+
+    new_ranks.persist()
+    if checkpoint:
+        new_ranks.checkpoint()
+
+    delta = new_ranks.join(ranks).mapValues(lambda x: abs(x[0] - x[1])).values().sum()
+    incoming.unpersist()
+    return new_ranks, delta
 
 
 def run_pagerank(links, num_pages, damping=DAMPING, epsilon=EPSILON,
@@ -132,7 +193,19 @@ def run_pagerank(links, num_pages, damping=DAMPING, epsilon=EPSILON,
     # max_iterations iterations, pass checkpoint=True every
     # `checkpoint_every` iterations, and unpersist the previous ranks.
     # Printing the delta of each iteration helps debugging.
-    raise NotImplementedError("run_pagerank")
+    num_partitions = links.getNumPartitions()
+    ranks = links.mapValues(lambda _: 1 / num_pages)
+    deltas = []
+    for i in range(max_iterations):
+        checkpoint = (i + 1) % checkpoint_every == 0
+        new_ranks, delta = pagerank_step(links, ranks, num_pages, damping, num_partitions, checkpoint)
+        deltas.append(delta)
+        ranks.unpersist()
+        ranks = new_ranks
+        print("Iteration %d: delta = %.12e" % (i + 1, delta))
+        if delta <= epsilon:
+            break
+    return ranks, deltas
 
 
 # --- Given code -----------------------------------------------------------------

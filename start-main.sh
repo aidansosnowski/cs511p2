@@ -34,4 +34,22 @@ fi
 
 # Start HDFS/Spark main here
 
+if [ ! -f /opt/hadoop-data/namenode/current/VERSION ]; then
+    hdfs namenode -format -force
+fi
+
+hdfs --daemon start namenode
+hdfs --daemon start datanode
+
+
+"$SPARK_HOME/sbin/start-master.sh"
+"$SPARK_HOME/sbin/start-worker.sh" spark://main:7077
+
+
+until hdfs dfsadmin -safemode wait; do
+    sleep 2
+done
+hdfs dfs -mkdir -p /spark/checkpoints
+
+
 bash
