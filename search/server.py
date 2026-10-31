@@ -30,7 +30,7 @@ import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
-
+import sqlite3
 TOP_K = 10
 
 # Tokenization rules of Project 1.
@@ -57,8 +57,7 @@ class SearchIndex:
         file); ignore it otherwise. Called once, when the server starts.
         """
         # TODO: implement.
-        raise NotImplementedError("SearchIndex.__init__")
-
+        self.database = database
     def search(self, terms):
         """Return the top TOP_K [(score, article_id, title)] for a set of terms.
 
@@ -68,7 +67,36 @@ class SearchIndex:
         """
         # TODO: implement. heapq.nsmallest(TOP_K, ..., key=lambda s: (-s[0], s[1]))
         # keeps the TOP_K best without sorting every match.
-        raise NotImplementedError("SearchIndex.search")
+        if not terms:
+            return []
+        terms = sorted(terms)
+        placeholders = ",".join("?" for _ in terms)
+
+        sql = f"""
+            SELECT
+                d.id,
+                d.title,
+                d.rank * SUM(p.weight) AS score
+            FROM postings p
+            JOIN documents d ON p.article_id = d.id
+            WHERE p.term IN ({placeholders})
+            GROUP BY d.id
+            HAVING COUNT(DISTINCT p.term) = ?
+            ORDER BY score DESC, d.id ASC
+            LIMIT ?
+        """
+
+        with sqlite3.connect(self.database) as conn:
+            rows = conn.execute(
+                sql,
+                (*terms, len(terms), TOP_K)
+            ).fetchall()
+
+        return [
+            (score, article_id, title)
+            for article_id, title, score in rows
+        ]
+
 
 
 # --- Given code -----------------------------------------------------------------

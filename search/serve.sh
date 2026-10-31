@@ -21,14 +21,32 @@ pkill -f '[s]erver.py' || true
 
 # 1. Build the index with Spark.
 hdfs dfs -rm -r -f "$INDEX_URI"
+# spark-submit --master spark://main:7077 indexer.py "$ARTICLES_URI" "$RANKS_URI" "$INDEX_URI"
+echo "Starting index build..."
+start_time=$SECONDS
+
 spark-submit --master spark://main:7077 indexer.py "$ARTICLES_URI" "$RANKS_URI" "$INDEX_URI"
+
+echo "INDEX BUILD TIME: $((SECONDS - start_time)) seconds"
 
 # 2. Load it into your database.
 # TODO: start your database if it runs as a service (or install it in the
 # Dockerfiles and start it in start-main.sh), and load the index into it,
 # e.g. hdfs dfs -cat "${INDEX_URI}/postings/part-*" | <your loader>.
-echo "TODO: load the index into your database (search/serve.sh)" >&2
-exit 1
+mkdir -p /data
+
+hdfs dfs -cat "${INDEX_URI}/docs/part-*" > /tmp/search_docs.tsv
+hdfs dfs -cat "${INDEX_URI}/postings/part-*" > /tmp/search_postings.tsv
+
+echo "Starting database load..."
+start_time=$SECONDS
+
+python3 load_db.py \
+    /tmp/search_docs.tsv \
+    /tmp/search_postings.tsv \
+    "$DATABASE"
+
+echo "DATABASE LOAD TIME: $((SECONDS - start_time)) seconds"
 
 # 3. Start the server in the background and wait until it answers.
 setsid nohup python3 server.py --port 8000 > /search/server.log 2>&1 < /dev/null &

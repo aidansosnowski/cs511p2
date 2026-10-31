@@ -68,6 +68,12 @@ def parse_rank(line):
     return (int(article_id), float(rank))
 
 
+def calculate_weights(items, num_articles):
+    items = list(items)
+    idf = math.log(num_articles / len(items))
+
+    return [(article_id, tf * idf) for article_id, tf in items]
+
 def build_postings(articles, num_articles):
     """Return an RDD of (term, [(article_id, weight), ...]) from (id, title, text).
 
@@ -77,14 +83,17 @@ def build_postings(articles, num_articles):
     # collections.Counter), group the (article_id, tf) pairs by term, and
     # turn each tf into tf * ln(num_articles / df), where df is the number
     # of articles in the term's group.
-    raise NotImplementedError("build_postings")
+    term_counts = articles.flatMap(lambda a: [(term, (a[0], tf)) for term, tf in Counter(tokenize(a[2])).items()])
+    grouped = term_counts.groupByKey()
+    return grouped.mapValues(lambda items: calculate_weights(items, num_articles))
 
 
 def build_docs(articles, ranks):
     """Return an RDD of (article_id, (rank, title)) for every valid article."""
     # TODO: join each article's title with its rank.
-    raise NotImplementedError("build_docs")
-
+    titles = articles.map(lambda a : (a[0], a[1]))
+    docs = titles.join(ranks)
+    return docs.mapValues(lambda x : (x[1], x[0]))
 
 # --- Given code -----------------------------------------------------------------
 
